@@ -523,19 +523,16 @@ class SatHeatingControl:
             return
 
         if not device_state.flame_active:
-            if (return_temperature := device_state.return_temperature) is None:
-                _LOGGER.warning("Setpoint override (flame off): no return temperature found.")
+            if (flame_off_hold_setpoint := self._flame_off_setpoint(device_state)) is None:
+                _LOGGER.warning("Setpoint override (flame off): no return or flow temperature found.")
                 return
-
-            flame_off_offset = config.flame_off_setpoint_offset_celsius
-            flame_off_hold_setpoint = clamp(return_temperature + flame_off_offset, COLD_SETPOINT, self._config.limits.maximum_setpoint)
 
             self._control_setpoint = flame_off_hold_setpoint
             self._flame_off_hold_setpoint = flame_off_hold_setpoint
 
             _LOGGER.debug(
-                "Setpoint override (flame off): return=%.1f°C offset=%.1f°C -> %.1f°C (intended=%.1f°C)",
-                return_temperature, flame_off_offset, self._flame_off_hold_setpoint, requested_setpoint,
+                "Setpoint override (flame off): reference=%.1f°C offset=%.1f°C -> %.1f°C (intended=%.1f°C)",
+                self._ignition_reference_temperature(device_state), config.flame_off_setpoint_offset_celsius, flame_off_hold_setpoint, requested_setpoint,
             )
 
             return
@@ -545,8 +542,8 @@ class SatHeatingControl:
 
         if elapsed_since_flame_on < suppression_delay:
             remaining_hold = suppression_delay - elapsed_since_flame_on
-            if self._flame_off_hold_setpoint is None and (return_temperature := device_state.return_temperature) is not None:
-                self._flame_off_hold_setpoint = clamp(return_temperature + config.flame_off_setpoint_offset_celsius, COLD_SETPOINT, self._config.limits.maximum_setpoint)
+            if self._flame_off_hold_setpoint is None:
+                self._flame_off_hold_setpoint = self._flame_off_setpoint(device_state)
 
             if self._flame_off_hold_setpoint is not None:
                 _LOGGER.debug(
@@ -578,6 +575,20 @@ class SatHeatingControl:
         )
 
         self._control_setpoint = suppressed_setpoint
+
+    def _flame_off_setpoint(self, device_state: DeviceState) -> Optional[float]:
+        if (reference_temperature := self._ignition_reference_temperature(device_state)) is None:
+            return None
+
+        return clamp(reference_temperature + self._config.flame_off_setpoint_offset_celsius, COLD_SETPOINT, self._config.limits.maximum_setpoint)
+
+    @staticmethod
+    def _ignition_reference_temperature(device_state: DeviceState) -> Optional[float]:
+        # Boilers without a return sensor answer OpenTherm data ID 28 as unknown, which gateways report as 0.0.
+        if device_state.return_temperature is not None and device_state.return_temperature > 0:
+            return device_state.return_temperature
+
+        return device_state.flow_temperature
 
     def _elapsed_since_flame_on(self) -> float:
         """The tracker may not have seen the current ignition yet, in which case the flame has just come on."""

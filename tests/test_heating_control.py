@@ -220,6 +220,24 @@ async def test_pwm_flame_off_return_offset(hass, monkeypatch, coordinator):
     assert heating_control.control_setpoint == 30.0 + OPTIONS_DEFAULTS[CONF_FLAME_OFF_SETPOINT_OFFSET_CELSIUS]
 
 
+@pytest.mark.parametrize("return_temperature", [0.0, None])
+async def test_pwm_flame_off_uses_flow_temperature_without_return_sensor(hass, monkeypatch, coordinator, return_temperature):
+    _update_coordinator_config(coordinator)
+    monkeypatch.setattr(type(coordinator), "return_temperature", property(lambda self: return_temperature))
+
+    heating_control = SatHeatingControl(hass=hass, coordinator=coordinator, config=coordinator._config)
+    _enable_pwm(heating_control, PWMStatus.ON)
+    monkeypatch.setattr(heating_control._pwm, "update", lambda *args, **kwargs: None)
+
+    await coordinator.async_set_heater_state(HeaterState.OFF)
+    await coordinator.async_set_boiler_temperature(30.0)
+
+    await heating_control.update(_make_demand(40.0))
+
+    assert heating_control.control_setpoint == 30.0 + OPTIONS_DEFAULTS[CONF_FLAME_OFF_SETPOINT_OFFSET_CELSIUS]
+    assert coordinator.active
+
+
 async def test_flame_off_setpoint_held_until_suppression_delay(hass, monkeypatch, coordinator):
     _update_coordinator_config(coordinator)
     monkeypatch.setattr(type(coordinator), "return_temperature", property(lambda self: 30.0))
