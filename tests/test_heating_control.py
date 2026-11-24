@@ -11,9 +11,11 @@ from custom_components.sat.const import (
     CONF_FLOW_SETPOINT_OFFSET_CELSIUS,
     CONF_FORCE_PULSE_WIDTH_MODULATION,
     CONF_HEATING_SYSTEM,
+    CONF_MAXIMUM_SETPOINT,
     CONF_MINIMUM_SETPOINT,
     CONF_MODE,
     CONF_MODULATION_SUPPRESSION_DELAY_SECONDS,
+    CONF_MODULATION_SUPPRESSION_OFFSET_CELSIUS,
     CONF_OVERSHOOT_PROTECTION,
     HEATER_STARTUP_TIMEFRAME,
     SATURATION_SUSTAIN_SECONDS,
@@ -50,9 +52,10 @@ pytestmark = pytest.mark.parametrize(
 )
 
 
-def _update_coordinator_config(coordinator) -> None:
+def _update_coordinator_config(coordinator, **option_overrides) -> None:
     options = {
         **OPTIONS_DEFAULTS,
+        **option_overrides,
     }
     config = SatConfig(
         entry_id="test",
@@ -203,6 +206,25 @@ async def test_pwm_suppression_applied(hass, coordinator, monkeypatch):
     await heating_control.update(_make_demand(40.0))
 
     assert heating_control.control_setpoint == 49.0
+
+
+@pytest.mark.parametrize(("flow_temperature", "expected_setpoint"), [(50.0, 53.0), (74.0, 75.0)])
+async def test_pwm_negative_suppression_offset_keeps_setpoint_above_flow(hass, coordinator, monkeypatch, flow_temperature, expected_setpoint):
+    _update_coordinator_config(coordinator, **{CONF_MODULATION_SUPPRESSION_OFFSET_CELSIUS: -3.0, CONF_MAXIMUM_SETPOINT: 75.0})
+
+    heating_control = SatHeatingControl(hass=hass, coordinator=coordinator, config=coordinator._config)
+    _enable_pwm(heating_control, PWMStatus.ON)
+    monkeypatch.setattr(heating_control._pwm, "update", lambda *args, **kwargs: None)
+
+    await coordinator.async_set_heater_state(HeaterState.ON)
+    await coordinator.async_set_boiler_temperature(flow_temperature)
+    heating_control._device_tracker._last_flame_on_at = timestamp() - (
+            OPTIONS_DEFAULTS[CONF_MODULATION_SUPPRESSION_DELAY_SECONDS] + 1
+    )
+
+    await heating_control.update(_make_demand(40.0))
+
+    assert heating_control.control_setpoint == expected_setpoint
 
 
 async def test_pwm_flame_off_return_offset(hass, monkeypatch, coordinator):

@@ -217,7 +217,7 @@
           "maximum_relative_modulation": "Cap the boiler modulation percentage (0–100) to limit maximum output.",
           "minimum_consumption": "Gas use at minimum modulation, used for consumption estimation.",
           "modulation_suppression_delay_seconds": "Time after flame-on before suppression can apply (Pulse Width Modulation only).",
-          "modulation_suppression_offset_celsius": "How much to lower the flow setpoint during suppression (Pulse Width Modulation only).",
+          "modulation_suppression_offset_celsius": "How much to lower the flow setpoint during suppression (Pulse Width Modulation only). Use a negative value for boilers that stop burning once the flow passes the setpoint; the boiler then keeps burning at minimum modulation for the whole on-time.",
           "flow_setpoint_offset_celsius": "Minimum offset below boiler temperature when clamping setpoint (continuous mode).",
           "minimum_boiler_pressure": "Lower pressure threshold for health detection (bar).",
           "maximum_boiler_pressure": "Upper pressure threshold for health detection (bar).",

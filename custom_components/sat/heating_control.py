@@ -567,7 +567,8 @@ class SatHeatingControl:
 
         self._flame_off_hold_setpoint = None
         flow_offset = config.modulation_suppression_offset_celsius
-        suppressed_setpoint = flow_temperature - flow_offset
+        # A negative offset keeps the setpoint above the flow, so boilers that stop once the flow passes the setpoint keep burning at minimum modulation.
+        suppressed_setpoint = clamp(flow_temperature - flow_offset, COLD_SETPOINT, self._config.limits.maximum_setpoint)
 
         _LOGGER.debug(
             "Setpoint override (suppression): flow=%.1f°C offset=%.1f°C -> %.1f°C (requested=%.1f°C)",

@@ -878,7 +878,7 @@ class SatOptionsFlowHandler(config_entries.OptionsFlow):
             ))
             schema_entries.append((
                 vol.Required(CONF_MODULATION_SUPPRESSION_OFFSET_CELSIUS, default=options[CONF_MODULATION_SUPPRESSION_OFFSET_CELSIUS]),
-                selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=10, step=0.1)),
+                selector.NumberSelector(selector.NumberSelectorConfig(min=-10, max=10, step=0.1)),
             ))
 
         schema_entries.append((
