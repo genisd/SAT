@@ -1,12 +1,12 @@
 """Sensor platform for SAT."""
 import logging
 from dataclasses import dataclass
-from typing import Optional, cast
+from typing import Any, Mapping, Optional, cast
 
 from homeassistant.components import sensor
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfPower, UnitOfPressure, UnitOfTemperature, UnitOfTime, UnitOfVolume
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import async_generate_entity_id
 from pyotgw.vars import *
 
@@ -108,28 +108,38 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     """Setup sensor platform."""
     entry_data = get_entry_data(hass, config_entry.entry_id)
     coordinator = cast(SatSerialCoordinator, entry_data.coordinator)
-    has_thermostat = coordinator.data[OTGW].get(OTGW_THRM_DETECT) != "D"
+    added: set[tuple[str, str]] = set()
 
-    # Create a list of entities to be added
-    entities = []
+    @callback
+    def add_newly_reported_sensors() -> None:
+        definitions = newly_reported_sensor_definitions(coordinator.data, added)
+        if not definitions:
+            return
 
-    # Iterate through sensor information
+        added.update((definition.source, definition.key) for definition in definitions)
+        async_add_entities([SatSensor(coordinator, entry_data.config, entry_data.heating_control, definition) for definition in definitions])
+
+    add_newly_reported_sensors()
+
+    # Right after connecting the gateway has only reported part of its values, so the rest are added as they arrive.
+    config_entry.async_on_unload(coordinator.async_add_listener(add_newly_reported_sensors))
+
+
+def newly_reported_sensor_definitions(data: Mapping[str, Mapping[str, Any]], added: set[tuple[str, str]]) -> list[SatSerialSensorDefinition]:
+    has_thermostat = data[OTGW].get(OTGW_THRM_DETECT) != "D"
+    definitions = []
+
     for key, info in SENSOR_INFO.items():
-        # Check if the sensor should be added based on its availability and thermostat presence
         for source in info.status_sources:
-            if source == THERMOSTAT and has_thermostat is False:
+            if source == THERMOSTAT and not has_thermostat:
                 continue
 
-            if coordinator.data[source].get(key) is not None:
-                definition = SatSerialSensorDefinition(
-                    key=key,
-                    info=info,
-                    source=source,
-                )
-                entities.append(SatSensor(coordinator, entry_data.config, entry_data.heating_control, definition))
+            if (source, key) in added or data[source].get(key) is None:
+                continue
 
-    # Add all devices
-    async_add_entities(entities)
+            definitions.append(SatSerialSensorDefinition(key=key, info=info, source=source))
+
+    return definitions
 
 
 class SatSensor(SatEntity, sensor.SensorEntity):
