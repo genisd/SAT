@@ -208,7 +208,7 @@ async def test_pwm_suppression_applied(hass, coordinator, monkeypatch):
     assert heating_control.control_setpoint == 49.0
 
 
-@pytest.mark.parametrize(("flow_temperature", "expected_setpoint"), [(50.0, 53.0), (74.0, 75.0)])
+@pytest.mark.parametrize(("flow_temperature", "expected_setpoint"), [(50.0, 53.0), (59.0, 60.0), (70.0, 60.0)])
 async def test_pwm_negative_suppression_offset_keeps_setpoint_above_flow(hass, coordinator, monkeypatch, flow_temperature, expected_setpoint):
     _update_coordinator_config(coordinator, **{CONF_MODULATION_SUPPRESSION_OFFSET_CELSIUS: -3.0, CONF_MAXIMUM_SETPOINT: 75.0})
 
@@ -222,7 +222,7 @@ async def test_pwm_negative_suppression_offset_keeps_setpoint_above_flow(hass, c
             OPTIONS_DEFAULTS[CONF_MODULATION_SUPPRESSION_DELAY_SECONDS] + 1
     )
 
-    await heating_control.update(_make_demand(40.0))
+    await heating_control.update(_make_demand(60.0))
 
     assert heating_control.control_setpoint == expected_setpoint
 
@@ -243,7 +243,8 @@ async def test_pwm_flame_off_return_offset(hass, monkeypatch, coordinator):
 
 
 @pytest.mark.parametrize("return_temperature", [0.0, None])
-async def test_pwm_flame_off_uses_flow_temperature_without_return_sensor(hass, monkeypatch, coordinator, return_temperature):
+@pytest.mark.parametrize(("flow_temperature", "expected_setpoint"), [(15.0, 15.0 + OPTIONS_DEFAULTS[CONF_FLAME_OFF_SETPOINT_OFFSET_CELSIUS]), (60.0, 40.0)])
+async def test_pwm_flame_off_uses_flow_temperature_without_return_sensor(hass, monkeypatch, coordinator, return_temperature, flow_temperature, expected_setpoint):
     _update_coordinator_config(coordinator)
     monkeypatch.setattr(type(coordinator), "return_temperature", property(lambda self: return_temperature))
 
@@ -252,11 +253,11 @@ async def test_pwm_flame_off_uses_flow_temperature_without_return_sensor(hass, m
     monkeypatch.setattr(heating_control._pwm, "update", lambda *args, **kwargs: None)
 
     await coordinator.async_set_heater_state(HeaterState.OFF)
-    await coordinator.async_set_boiler_temperature(30.0)
+    await coordinator.async_set_boiler_temperature(flow_temperature)
 
     await heating_control.update(_make_demand(40.0))
 
-    assert heating_control.control_setpoint == 30.0 + OPTIONS_DEFAULTS[CONF_FLAME_OFF_SETPOINT_OFFSET_CELSIUS]
+    assert heating_control.control_setpoint == expected_setpoint
     assert coordinator.active
 
 

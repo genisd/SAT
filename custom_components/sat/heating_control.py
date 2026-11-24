@@ -523,7 +523,7 @@ class SatHeatingControl:
             return
 
         if not device_state.flame_active:
-            if (flame_off_hold_setpoint := self._flame_off_setpoint(device_state)) is None:
+            if (flame_off_hold_setpoint := self._flame_off_setpoint(device_state, requested_setpoint)) is None:
                 _LOGGER.warning("Setpoint override (flame off): no return or flow temperature found.")
                 return
 
@@ -531,8 +531,8 @@ class SatHeatingControl:
             self._flame_off_hold_setpoint = flame_off_hold_setpoint
 
             _LOGGER.debug(
-                "Setpoint override (flame off): reference=%.1f°C offset=%.1f°C -> %.1f°C (intended=%.1f°C)",
-                self._ignition_reference_temperature(device_state), config.flame_off_setpoint_offset_celsius, flame_off_hold_setpoint, requested_setpoint,
+                "Setpoint override (flame off): return=%s flow=%s offset=%.1f°C -> %.1f°C (intended=%.1f°C)",
+                device_state.return_temperature, device_state.flow_temperature, config.flame_off_setpoint_offset_celsius, flame_off_hold_setpoint, requested_setpoint,
             )
 
             return
@@ -543,7 +543,7 @@ class SatHeatingControl:
         if elapsed_since_flame_on < suppression_delay:
             remaining_hold = suppression_delay - elapsed_since_flame_on
             if self._flame_off_hold_setpoint is None:
-                self._flame_off_hold_setpoint = self._flame_off_setpoint(device_state)
+                self._flame_off_hold_setpoint = self._flame_off_setpoint(device_state, requested_setpoint)
 
             if self._flame_off_hold_setpoint is not None:
                 _LOGGER.debug(
@@ -567,8 +567,12 @@ class SatHeatingControl:
 
         self._flame_off_hold_setpoint = None
         flow_offset = config.modulation_suppression_offset_celsius
-        # A negative offset keeps the setpoint above the flow, so boilers that stop once the flow passes the setpoint keep burning at minimum modulation.
         suppressed_setpoint = clamp(flow_temperature - flow_offset, COLD_SETPOINT, self._config.limits.maximum_setpoint)
+
+        # A negative offset keeps the setpoint above the flow so boilers that stop once the flow passes the setpoint keep burning
+        # at minimum modulation, but it must not chase the water past what was requested.
+        if flow_offset < 0:
+            suppressed_setpoint = clamp(suppressed_setpoint, COLD_SETPOINT, requested_setpoint)
 
         _LOGGER.debug(
             "Setpoint override (suppression): flow=%.1f°C offset=%.1f°C -> %.1f°C (requested=%.1f°C)",
@@ -577,19 +581,18 @@ class SatHeatingControl:
 
         self._control_setpoint = suppressed_setpoint
 
-    def _flame_off_setpoint(self, device_state: DeviceState) -> Optional[float]:
-        if (reference_temperature := self._ignition_reference_temperature(device_state)) is None:
-            return None
+    def _flame_off_setpoint(self, device_state: DeviceState, requested_setpoint: float) -> Optional[float]:
+        flame_off_offset = self._config.flame_off_setpoint_offset_celsius
 
-        return clamp(reference_temperature + self._config.flame_off_setpoint_offset_celsius, COLD_SETPOINT, self._config.limits.maximum_setpoint)
-
-    @staticmethod
-    def _ignition_reference_temperature(device_state: DeviceState) -> Optional[float]:
         # Boilers without a return sensor answer OpenTherm data ID 28 as unknown, which gateways report as 0.0.
         if device_state.return_temperature is not None and device_state.return_temperature > 0:
-            return device_state.return_temperature
+            return clamp(device_state.return_temperature + flame_off_offset, COLD_SETPOINT, self._config.limits.maximum_setpoint)
 
-        return device_state.flow_temperature
+        if device_state.flow_temperature is None:
+            return None
+
+        # On top of the flow every restart would ask for hotter water than the last burn left, so the request caps it.
+        return clamp(device_state.flow_temperature + flame_off_offset, COLD_SETPOINT, requested_setpoint)
 
     def _elapsed_since_flame_on(self) -> float:
         """The tracker may not have seen the current ignition yet, in which case the flame has just come on."""
