@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass, replace
@@ -9,12 +10,13 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from homeassistant.components.climate import HVACMode
-from homeassistant.core import HomeAssistant, State
+from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers.dispatcher import dispatcher_send
 
 from .boiler_health import BoilerHealthMonitor
 from .const import (
     COLD_SETPOINT,
+    COMMAND_TIMEOUT_SECONDS,
     HEATER_STARTUP_TIMEFRAME,
     DHW_OVERSHOOT_GUARD_SECONDS,
     MINIMUM_RELATIVE_MODULATION,
@@ -110,6 +112,7 @@ class SatHeatingControl:
         self._last_outside_temperature: Optional[float] = None
         self._requested_setpoints: deque[RequestedSetpointSample] = deque()
 
+        self._command_lock = asyncio.Lock()
         self._flame_off_hold_setpoint: Optional[float] = None
         self._coordinator_listener_remove: Optional[Callable[[], None]] = None
         self._pwm_cycle_listener_remove: Optional[Callable[[], None]] = None
@@ -244,6 +247,24 @@ class SatHeatingControl:
 
     async def update(self, demand: HeatingDemand) -> None:
         """Apply a new demand update and push commands to the coordinator."""
+        async with asyncio.timeout(COMMAND_TIMEOUT_SECONDS):
+            async with self._command_lock:
+                await self._apply(demand)
+
+    async def async_release(self) -> None:
+        """Stop commanding the boiler and release it."""
+        async with self._command_lock:
+            if not self._coordinator.released:
+                self._pwm.suspend(timestamp())
+                self._reset_pwm_disable_guards()
+
+                self._control_setpoint = MINIMUM_SETPOINT
+                self._relative_modulation_value = self._config.pwm.maximum_relative_modulation
+
+            await self._coordinator.async_release()
+
+    async def _apply(self, demand: HeatingDemand) -> None:
+        """Decide on the commands for a demand and send them."""
         self._last_requested_setpoint = demand.requested_setpoint
         self._last_outside_temperature = demand.outside_temperature
         self._record_requested_setpoint(demand)
@@ -314,6 +335,7 @@ class SatHeatingControl:
 
         dispatcher_send(self._hass, SIGNAL_HEATING_CONTROL_UPDATED, self._coordinator.id)
 
+    @callback
     def _on_cycle_ended(self, event) -> None:
         """Forward completed cycles to the PWM controller."""
         if (cycle := event.data.get("cycle")) is None:
@@ -352,6 +374,10 @@ class SatHeatingControl:
             return
 
         if demand.requested_setpoint <= COLD_SETPOINT:
+            self._sustained_overshoot_started_at = None
+            return
+
+        if not device_state.flame_active:
             self._sustained_overshoot_started_at = None
             return
 
